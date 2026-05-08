@@ -4,8 +4,6 @@ const path = require("path");
 const crypto = require("crypto");
 
 const PORT = Number(process.env.PORT || 5600);
-const ADMIN_USER = process.env.ADMIN_USER || "admin";
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "1234";
 const DATA_DIR = path.join(__dirname, "data");
 const LOG_FILE = path.join(DATA_DIR, "visits.json");
 
@@ -25,48 +23,6 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
-}
-
-function secureEqual(a, b) {
-  const left = Buffer.from(String(a));
-  const right = Buffer.from(String(b));
-  if (left.length !== right.length) return false;
-  return crypto.timingSafeEqual(left, right);
-}
-
-function isAdmin(req) {
-  const cookies = Object.fromEntries((req.headers.cookie || "")
-    .split(";")
-    .map((part) => part.trim().split("="))
-    .filter((parts) => parts.length === 2));
-  return cookies.admin === makeSessionToken();
-}
-
-function makeSessionToken() {
-  return crypto
-    .createHash("sha256")
-    .update(`${ADMIN_USER}:${ADMIN_PASSWORD}`)
-    .digest("hex");
-}
-
-function redirect(res, location) {
-  res.writeHead(302, { location });
-  res.end();
-}
-
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    req.on("data", (chunk) => {
-      body += chunk;
-      if (body.length > 10000) {
-        req.destroy();
-        reject(new Error("Body too large"));
-      }
-    });
-    req.on("end", () => resolve(body));
-    req.on("error", reject);
-  });
 }
 
 function getVisitorIp(req) {
@@ -147,84 +103,6 @@ function publicPage() {
     <h1>접속 확인됨</h1>
     <p>이 사이트는 운영자 확인용으로 접속 시간, IP 주소, 브라우저 정보를 저장합니다.</p>
   </main>
-</body>
-</html>`;
-}
-
-function loginPage(error = "") {
-  return `<!doctype html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>관리자 로그인</title>
-  <style>
-    body {
-      margin: 0;
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
-      background: #f6f7f2;
-      color: #1e2320;
-      font-family: "Segoe UI", system-ui, sans-serif;
-    }
-    form {
-      width: min(380px, calc(100% - 32px));
-      border: 1px solid #d8ddd4;
-      border-radius: 8px;
-      background: white;
-      padding: 24px;
-      box-shadow: 0 16px 50px rgba(32, 45, 38, 0.12);
-    }
-    h1 {
-      margin: 0 0 18px;
-      font-size: 28px;
-      letter-spacing: 0;
-    }
-    label {
-      display: block;
-      margin: 12px 0 6px;
-      color: #53615a;
-      font-weight: 700;
-      font-size: 14px;
-    }
-    input {
-      width: 100%;
-      min-height: 44px;
-      border: 1px solid #cfd7d2;
-      border-radius: 8px;
-      padding: 0 12px;
-      font: inherit;
-    }
-    button {
-      width: 100%;
-      min-height: 44px;
-      margin-top: 16px;
-      border: 0;
-      border-radius: 8px;
-      background: #167a67;
-      color: white;
-      font: inherit;
-      font-weight: 800;
-      cursor: pointer;
-    }
-    .error {
-      margin: 0 0 12px;
-      color: #a94b1b;
-      font-weight: 700;
-    }
-  </style>
-</head>
-<body>
-  <form method="post" action="/login">
-    <h1>관리자 로그인</h1>
-    ${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}
-    <label for="user">아이디</label>
-    <input id="user" name="user" autocomplete="username" value="admin">
-    <label for="password">비밀번호</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" autofocus>
-    <button type="submit">들어가기</button>
-  </form>
 </body>
 </html>`;
 }
@@ -337,35 +215,7 @@ async function handle(req, res) {
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 
   try {
-    if (url.pathname === "/login" && req.method === "GET") {
-      send(res, 200, loginPage());
-      return;
-    }
-
-    if (url.pathname === "/login" && req.method === "POST") {
-      const form = new URLSearchParams(await readBody(req));
-      const user = form.get("user") || "";
-      const password = form.get("password") || "";
-
-      if (secureEqual(user, ADMIN_USER) && secureEqual(password, ADMIN_PASSWORD)) {
-        res.writeHead(302, {
-          location: "/admin",
-          "set-cookie": `admin=${makeSessionToken()}; HttpOnly; SameSite=Lax; Path=/`
-        });
-        res.end();
-        return;
-      }
-
-      send(res, 401, loginPage("아이디나 비밀번호가 틀렸습니다."));
-      return;
-    }
-
     if (url.pathname === "/admin") {
-      if (!isAdmin(req)) {
-        redirect(res, "/login");
-        return;
-      }
-
       send(res, 200, adminPage(await readLogs()));
       return;
     }
@@ -386,8 +236,5 @@ async function handle(req, res) {
 http.createServer(handle).listen(PORT, () => {
   console.log(`Server running at http://127.0.0.1:${PORT}`);
   console.log(`Admin page: http://127.0.0.1:${PORT}/admin`);
-  console.log(`Admin user: ${ADMIN_USER}`);
-  if (ADMIN_PASSWORD === "1234") {
-    console.log("Set ADMIN_PASSWORD before publishing this site.");
-  }
+  console.log("Admin page has no password. Do not publish this version as-is.");
 });
