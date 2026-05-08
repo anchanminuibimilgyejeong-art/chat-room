@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>동의 확인 사이트</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="consent-page">
+    <main class="consent-panel">
+      <p class="site-label">다른 사이트</p>
+      <h1>개인정보 수집 동의가 열렸습니다</h1>
+      <p>
+        이 화면은 데모입니다. 실제 이름, 전화번호, 주소 같은 개인정보는
+        저장하거나 전송하지 않습니다.
+      </p>
+
+      <section class="notice-box" aria-label="수집 안내 예시">
+        <h2>수집 안내 예시</h2>
+        <dl>
+          <div>
+            <dt>수집 항목</dt>
+            <dd>이름, 연락처, 이메일</dd>
+          </div>
+          <div>
+            <dt>사용 목적</dt>
+            <dd>서비스 신청 확인</dd>
+          </div>
+          <div>
+            <dt>보관 기간</dt>
+            <dd>동의 철회 또는 목적 달성 시까지</dd>
+          </div>
+        </dl>
+      </section>
+
+      <form class="demo-form">
+        <label>
+          이름
+          <input type="text" placeholder="데모 입력란" autocomplete="off" />
+        </label>
+        <label>
+          이메일
+          <input type="email" placeholder="demo@example.com" autocomplete="off" />
+        </label>
+        <button type="submit">데모 제출</button>
+      </form>
+    </main>
+
+    <script src="./main.js"></script>
+  </body>
+</html>
