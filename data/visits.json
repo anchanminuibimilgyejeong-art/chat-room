@@ -1,61 +1,7 @@
 [
   {
-    "id": "bb6e1b52-7f29-4c7c-adc1-638c15d43df6",
-    "createdAt": "2026-05-09T05:32:29.922Z",
-    "consent": true,
-    "ip": "127.0.0.1",
-    "geo": {
-      "source": "local",
-      "city": "로컬 테스트",
-      "region": "",
-      "country": "",
-      "postal": "",
-      "latitude": "",
-      "longitude": "",
-      "org": "",
-      "note": "로컬/사설 IP라서 실제 주소 추정이 불가능합니다. 배포된 사이트에서 접속하면 공인 IP 기준으로 조회됩니다."
-    },
-    "userAgent": "curl/8.13.0"
-  },
-  {
-    "id": "a1da54dd-009b-4afe-8067-bb955a207993",
-    "createdAt": "2026-05-09T05:32:55.816Z",
-    "consent": true,
-    "ip": "127.0.0.1",
-    "geo": {
-      "source": "local",
-      "city": "로컬 테스트",
-      "region": "",
-      "country": "",
-      "postal": "",
-      "latitude": "",
-      "longitude": "",
-      "org": "",
-      "note": "로컬/사설 IP라서 실제 주소 추정이 불가능합니다. 배포된 사이트에서 접속하면 공인 IP 기준으로 조회됩니다."
-    },
-    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Codex/26.506.21252 Chrome/146.0.7680.179 Electron/41.2.0 Safari/537.36"
-  },
-  {
-    "id": "daaf3284-53fb-4f4e-a2e1-ae71d45de428",
-    "createdAt": "2026-05-09T05:33:12.473Z",
-    "consent": true,
-    "ip": "127.0.0.1",
-    "geo": {
-      "source": "local",
-      "city": "로컬 테스트",
-      "region": "",
-      "country": "",
-      "postal": "",
-      "latitude": "",
-      "longitude": "",
-      "org": "",
-      "note": "로컬/사설 IP라서 실제 주소 추정이 불가능합니다. 배포된 사이트에서 접속하면 공인 IP 기준으로 조회됩니다."
-    },
-    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Codex/26.506.21252 Chrome/146.0.7680.179 Electron/41.2.0 Safari/537.36"
-  },
-  {
-    "id": "f0a56b42-59e9-4dd4-8804-c803a9d83c6a",
-    "createdAt": "2026-05-09T05:37:15.931Z",
+    "id": "bd3db9fa-a47a-41e7-9b47-feafbab63e3f",
+    "createdAt": "2026-05-09T06:26:28.383Z",
     "consent": true,
     "ip": "127.0.0.1",
     "geo": {

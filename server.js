@@ -2,6 +2,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { renderConsent } = require("./views/consent");
 
 const PORT = process.env.PORT || 5600;
 const ROOT = __dirname;
@@ -224,7 +225,7 @@ function send(res, status, body, contentType = "text/html; charset=utf-8") {
 
 function serveStatic(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
-  const fileName = url.pathname === "/" ? "index.html" : url.pathname === "/consent" ? "consent.html" : url.pathname.slice(1);
+  const fileName = url.pathname.slice(1);
   const filePath = path.normalize(path.join(PUBLIC_DIR, fileName));
 
   if (!filePath.startsWith(PUBLIC_DIR)) {
@@ -346,7 +347,12 @@ function renderAdmin() {
         <p class="eyebrow">관리자</p>
         <h1>동의한 접속 기록</h1>
       </div>
-      <a class="button secondary" href="/admin-logout">로그아웃</a>
+      <div class="adminActions">
+        <form method="post" action="/admin-clear" onsubmit="return confirm('기록을 전부 삭제할까요?');">
+          <button class="button danger" type="submit">기록 삭제</button>
+        </form>
+        <a class="button secondary" href="/admin-logout">로그아웃</a>
+      </div>
     </header>
     <div class="tableWrap">
       <table>
@@ -413,8 +419,30 @@ async function handleAdminLogin(req, res) {
   res.end();
 }
 
+function handleAdminClear(req, res) {
+  if (!isAdmin(req)) {
+    send(res, 403, "Forbidden", "text/plain; charset=utf-8");
+    return;
+  }
+
+  writeVisits([]);
+  res.writeHead(303, { Location: "/admin" });
+  res.end();
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
+
+  if (req.method === "GET" && url.pathname === "/") {
+    send(res, 200, renderConsent());
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/consent") {
+    res.writeHead(303, { Location: "/" });
+    res.end();
+    return;
+  }
 
   if (req.method === "POST" && url.pathname === "/collect") {
     await handleCollect(req, res);
@@ -423,6 +451,11 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "POST" && url.pathname === "/admin-login") {
     await handleAdminLogin(req, res);
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/admin-clear") {
+    handleAdminClear(req, res);
     return;
   }
 
