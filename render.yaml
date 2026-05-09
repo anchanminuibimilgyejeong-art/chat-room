@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: consent-ip-location-site
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeploy: true
+    envVars:
+      - key: ADMIN_PASSWORD
+        sync: false
