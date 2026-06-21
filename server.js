@@ -1,158 +1,221 @@
 const http = require("http");
-const fs = require("fs");
+const fs = require("fs/promises");
 const path = require("path");
-const { renderAdmin, renderAdminLogin, renderResult } = require("./views/pages");
-const { createAdminAuth } = require("./lib/admin-auth");
-const { createVisitStore } = require("./lib/visit-store");
-const { createConsentRoutes } = require("./routes/consent");
 
-const PORT = process.env.PORT || 5600;
-const ROOT = __dirname;
-const PUBLIC_DIR = path.join(ROOT, "public");
-const VISITS_FILE = path.join(ROOT, "data", "visits.json");
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin1234";
-const ADMIN_COOKIE = "admin_session";
+const PORT = Number(process.env.PORT || 5600);
+const DATA_DIR = path.join(__dirname, "data");
+const LOG_FILE = path.join(DATA_DIR, "visits.json");
+const PREVIEW_IMAGE = path.join(__dirname, "assets", "bhc-coupon.jfif");
 
-const visitStore = createVisitStore(VISITS_FILE);
-const adminAuth = createAdminAuth({
-  password: ADMIN_PASSWORD,
-  cookieName: ADMIN_COOKIE
-});
-const consentRoutes = createConsentRoutes({ send, visitStore });
-
-function send(res, status, body, contentType = "text/html; charset=utf-8") {
+function send(res, status, body, headers = {}) {
   res.writeHead(status, {
-    "Content-Type": contentType,
-    "Cache-Control": "no-store"
+    "content-type": "text/html; charset=utf-8",
+    "x-content-type-options": "nosniff",
+    ...headers
   });
   res.end(body);
 }
 
-function parseBody(req) {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    req.on("data", (chunk) => {
-      body += chunk;
-      if (body.length > 20_000) {
-        req.destroy();
-        reject(new Error("body too large"));
-      }
-    });
-    req.on("end", () => resolve(new URLSearchParams(body)));
-    req.on("error", reject);
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function getVisitorIp(req) {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (typeof forwarded === "string" && forwarded.trim()) {
+    return forwarded.split(",")[0].trim();
+  }
+
+  return req.socket.remoteAddress || "unknown";
+}
+
+async function readLogs() {
+  try {
+    const raw = await fs.readFile(LOG_FILE, "utf8");
+    const logs = JSON.parse(raw);
+    return Array.isArray(logs) ? logs : [];
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+async function writeLogs(logs) {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  await fs.writeFile(LOG_FILE, JSON.stringify(logs.slice(-500), null, 2));
+}
+
+async function saveVisit(req) {
+  const logs = await readLogs();
+  logs.push({
+    time: new Date().toISOString(),
+    ip: getVisitorIp(req),
+    userAgent: req.headers["user-agent"] || "",
+    path: req.url || "/"
   });
+  await writeLogs(logs);
 }
 
-function serveStatic(req, res) {
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  const filePath = path.normalize(path.join(PUBLIC_DIR, url.pathname.slice(1)));
-
-  if (!filePath.startsWith(PUBLIC_DIR)) {
-    send(res, 403, "Forbidden", "text/plain; charset=utf-8");
-    return;
-  }
-
-  if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
-    send(res, 404, "Not found", "text/plain; charset=utf-8");
-    return;
-  }
-
-  const ext = path.extname(filePath).toLowerCase();
-  const contentType = ext === ".css" ? "text/css; charset=utf-8" : "text/html; charset=utf-8";
-  send(res, 200, fs.readFileSync(filePath), contentType);
+function publicPage(imageUrl) {
+  return `<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title></title>
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="${escapeHtml(imageUrl)}">
+</head>
+<body></body>
+</html>`;
 }
 
-async function handleAdminLogin(req, res) {
-  const body = await parseBody(req);
+function adminPage(logs) {
+  const rows = logs.slice().reverse().map((log) => `
+    <tr>
+      <td>${escapeHtml(new Date(log.time).toLocaleString("ko-KR"))}</td>
+      <td>${escapeHtml(log.ip)}</td>
+      <td>${escapeHtml(log.path)}</td>
+      <td>${escapeHtml(log.userAgent)}</td>
+    </tr>
+  `).join("");
 
-  if (!adminAuth.isPasswordMatch(body.get("password") || "")) {
-    send(res, 401, renderAdminLogin("비밀번호가 틀렸습니다."));
-    return;
-  }
-
-  res.writeHead(303, {
-    Location: "/admin",
-    "Set-Cookie": adminAuth.loginCookie()
-  });
-  res.end();
+  return `<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>관리자 접속 기록</title>
+  <style>
+    body {
+      margin: 0;
+      background: #f6f7f2;
+      color: #1e2320;
+      font-family: "Segoe UI", system-ui, sans-serif;
+    }
+    main {
+      width: min(1180px, calc(100% - 28px));
+      margin: 0 auto;
+      padding: 28px 0;
+    }
+    header {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 30px;
+      letter-spacing: 0;
+    }
+    .count {
+      color: #63716a;
+      font-weight: 700;
+    }
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid #d8ddd4;
+      border-radius: 8px;
+      background: white;
+      box-shadow: 0 16px 50px rgba(32, 45, 38, 0.1);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 840px;
+    }
+    th,
+    td {
+      padding: 13px 14px;
+      border-bottom: 1px solid #e7ebe5;
+      text-align: left;
+      vertical-align: top;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    th {
+      background: #eef3ef;
+      font-size: 13px;
+      color: #46544e;
+    }
+    td:nth-child(4) {
+      max-width: 520px;
+      overflow-wrap: anywhere;
+    }
+    .empty {
+      padding: 24px;
+      color: #63716a;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>접속 기록</h1>
+      <div class="count">총 ${logs.length}개</div>
+    </header>
+    <div class="table-wrap">
+      ${logs.length ? `<table>
+        <thead>
+          <tr>
+            <th>시간</th>
+            <th>IP</th>
+            <th>경로</th>
+            <th>브라우저</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>` : `<div class="empty">아직 접속 기록이 없습니다.</div>`}
+    </div>
+  </main>
+</body>
+</html>`;
 }
 
-function handleAdminClear(req, res) {
-  if (!adminAuth.isAdmin(req)) {
-    send(res, 403, "Forbidden", "text/plain; charset=utf-8");
-    return;
-  }
+async function handle(req, res) {
+  const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 
-  visitStore.clearVisits();
-  res.writeHead(303, { Location: "/admin" });
-  res.end();
+  try {
+    if (url.pathname === "/assets/bhc-coupon.jfif") {
+      const image = await fs.readFile(PREVIEW_IMAGE);
+      res.writeHead(200, {
+        "content-type": "image/jpeg",
+        "cache-control": "public, max-age=86400",
+        "x-content-type-options": "nosniff"
+      });
+      res.end(image);
+      return;
+    }
+
+    if (url.pathname === "/admin") {
+      send(res, 200, adminPage(await readLogs()));
+      return;
+    }
+
+    if (url.pathname === "/") {
+      await saveVisit(req);
+      const protocol = req.headers["x-forwarded-proto"] || "http";
+      const imageUrl = `${protocol}://${req.headers.host}/assets/bhc-coupon.jfif`;
+      send(res, 200, publicPage(imageUrl));
+      return;
+    }
+
+    send(res, 404, "페이지를 찾을 수 없습니다.");
+  } catch (error) {
+    console.error(error);
+    send(res, 500, "서버 오류가 발생했습니다.");
+  }
 }
 
-function handleAdminLogout(res) {
-  res.writeHead(303, {
-    Location: "/admin",
-    "Set-Cookie": adminAuth.logoutCookie()
-  });
-  res.end();
-}
-
-function handleResult(req, res, url) {
-  const record = visitStore.readVisits().find((visit) => visit.id === url.searchParams.get("id"));
-
-  if (!record) {
-    send(res, 404, "Record not found", "text/plain; charset=utf-8");
-    return;
-  }
-
-  send(res, 200, renderResult(record));
-}
-
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
-
-  if (req.method === "GET" && url.pathname === "/") {
-    res.writeHead(303, { Location: "/consent" });
-    res.end();
-    return;
-  }
-
-  if (await consentRoutes.handle(req, res, url)) {
-    return;
-  }
-
-  if (req.method === "GET" && url.pathname === "/result") {
-    handleResult(req, res, url);
-    return;
-  }
-
-  if (req.method === "GET" && url.pathname === "/admin") {
-    send(res, 200, adminAuth.isAdmin(req) ? renderAdmin(visitStore.readVisits()) : renderAdminLogin());
-    return;
-  }
-
-  if (req.method === "POST" && url.pathname === "/admin-login") {
-    await handleAdminLogin(req, res);
-    return;
-  }
-
-  if (req.method === "POST" && url.pathname === "/admin-clear") {
-    handleAdminClear(req, res);
-    return;
-  }
-
-  if (req.method === "GET" && url.pathname === "/admin-logout") {
-    handleAdminLogout(res);
-    return;
-  }
-
-  if (req.method === "GET") {
-    serveStatic(req, res);
-    return;
-  }
-
-  send(res, 405, "Method not allowed", "text/plain; charset=utf-8");
-});
-
-server.listen(PORT, () => {
-  console.log(`Consent IP site running at http://127.0.0.1:${PORT}`);
+http.createServer(handle).listen(PORT, () => {
+  console.log(`Server running at http://127.0.0.1:${PORT}`);
+  console.log(`Admin page: http://127.0.0.1:${PORT}/admin`);
+  console.log("Admin page has no password. Do not publish this version as-is.");
 });

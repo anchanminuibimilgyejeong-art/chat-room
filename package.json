@@ -1,8 +1,7 @@
 {
-  "name": "consent-ip-location-site",
+  "name": "private-visit-log",
   "version": "1.0.0",
   "private": true,
-  "type": "commonjs",
   "scripts": {
     "start": "node server.js"
   },
