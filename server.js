@@ -1,6 +1,7 @@
 const http = require("http");
 const fs = require("fs/promises");
 const path = require("path");
+const crypto = require("crypto");
 
 const PORT = Number(process.env.PORT || 5600);
 const DATA_DIR = path.join(__dirname, "data");
@@ -40,6 +41,10 @@ function normalizeIp(ip) {
   return String(ip || "").replace(/^::ffff:/, "");
 }
 
+function headerValue(value) {
+  return Array.isArray(value) ? value.join(", ") : value || "-";
+}
+
 function isPublicIp(ip) {
   const value = normalizeIp(ip);
   return value
@@ -77,8 +82,11 @@ async function getIpInfo(ip) {
       status: "조회 완료",
       location: [data.city, data.region, data.country].filter(Boolean).join(", "),
       continent: [data.continent, data.continent_code].filter(Boolean).join(" / "),
+      continentCode: data.continent_code || "",
       country: [data.country, data.country_code].filter(Boolean).join(" / "),
+      countryCode: data.country_code || "",
       region: [data.region, data.region_code].filter(Boolean).join(" / "),
+      regionCode: data.region_code || "",
       postcode: data.postal || "",
       coordinates: [data.latitude, data.longitude].filter((value) => value !== undefined && value !== null).join(", "),
       capital: data.capital || "",
@@ -134,10 +142,21 @@ async function writeLogs(logs) {
 async function saveVisit(req) {
   const logs = await readLogs();
   logs.push({
+    id: crypto.randomUUID(),
     time: new Date().toISOString(),
     ip: getVisitorIp(req),
     userAgent: req.headers["user-agent"] || "",
-    path: req.url || "/"
+    path: req.url || "/",
+    consent: "기록 없음",
+    host: headerValue(req.headers.host),
+    forwardedFor: headerValue(req.headers["x-forwarded-for"]),
+    forwardedProto: headerValue(req.headers["x-forwarded-proto"]),
+    realIp: headerValue(req.headers["x-real-ip"]),
+    acceptLanguage: headerValue(req.headers["accept-language"]),
+    accept: headerValue(req.headers.accept),
+    referer: headerValue(req.headers.referer),
+    connectionIp: req.socket.remoteAddress || "-",
+    httpVersion: req.httpVersion || "-"
   });
   await writeLogs(logs);
 }
@@ -157,19 +176,7 @@ function publicPage(imageUrl) {
 }
 
 function adminPage(logs, ipInfoMap) {
-  const rows = logs.slice().reverse().map((log) => `
-    <tr>
-      <td>${escapeHtml(new Date(log.time).toLocaleString("ko-KR"))}</td>
-      <td>${escapeHtml(normalizeIp(log.ip))}</td>
-      <td>${escapeHtml(formatLocation(ipInfoMap.get(normalizeIp(log.ip))))}</td>
-      <td>${escapeHtml(formatCoordinates(ipInfoMap.get(normalizeIp(log.ip))))}</td>
-      <td>${escapeHtml(formatNetwork(ipInfoMap.get(normalizeIp(log.ip))))}</td>
-      <td>${escapeHtml(formatSecurity(ipInfoMap.get(normalizeIp(log.ip))))}</td>
-      <td>${renderFullInfo(ipInfoMap.get(normalizeIp(log.ip)))}</td>
-      <td>${escapeHtml(log.path)}</td>
-      <td>${escapeHtml(log.userAgent)}</td>
-    </tr>
-  `).join("");
+  const entries = logs.slice().reverse().map((log, index) => renderVisit(log, ipInfoMap.get(normalizeIp(log.ip)), index === 0)).join("");
 
   return `<!doctype html>
 <html lang="ko">
@@ -205,62 +212,31 @@ function adminPage(logs, ipInfoMap) {
       color: #63716a;
       font-weight: 700;
     }
-    .table-wrap {
-      overflow-x: auto;
+    .log-list {
+      display: grid;
+      gap: 12px;
+    }
+    .log-card {
       border: 1px solid #d8ddd4;
       border-radius: 8px;
       background: white;
-      box-shadow: 0 16px 50px rgba(32, 45, 38, 0.1);
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      min-width: 1680px;
-    }
-    th,
-    td {
-      padding: 13px 14px;
-      border-bottom: 1px solid #e7ebe5;
-      text-align: left;
-      vertical-align: top;
-      font-size: 14px;
-      line-height: 1.45;
-    }
-    th {
-      background: #eef3ef;
-      font-size: 13px;
-      color: #46544e;
-    }
-    td:nth-child(9) {
-      max-width: 520px;
-      overflow-wrap: anywhere;
-    }
-    td:nth-child(3),
-    td:nth-child(4),
-    td:nth-child(5),
-    td:nth-child(6) {
-      white-space: pre-line;
-    }
-    details {
-      min-width: 210px;
+      box-shadow: 0 10px 32px rgba(32, 45, 38, 0.08);
     }
     summary {
+      padding: 15px 16px;
       color: #167a67;
       cursor: pointer;
-      font-weight: 700;
+      font-weight: 750;
+      line-height: 1.5;
     }
     pre {
-      width: 420px;
-      max-height: 320px;
       overflow: auto;
-      margin: 10px 0 0;
-      padding: 12px;
-      border: 1px solid #d8ddd4;
-      border-radius: 6px;
-      background: #f6f8f5;
+      margin: 0;
+      padding: 0 16px 16px;
       color: #304039;
-      font: 12px/1.45 Consolas, monospace;
+      font: 13px/1.58 Consolas, monospace;
       white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
     .notice {
       margin: 0 0 18px;
@@ -281,27 +257,63 @@ function adminPage(logs, ipInfoMap) {
       <div class="count">총 ${logs.length}개</div>
     </header>
     <p class="notice">IP 위치 정보는 대략적인 값입니다. 관리자 페이지를 열 때 IP가 공개 GeoIP 조회 서비스로 전송됩니다.</p>
-    <div class="table-wrap">
-      ${logs.length ? `<table>
-        <thead>
-          <tr>
-            <th>시간</th>
-            <th>IP</th>
-            <th>위치 / 시간대</th>
-            <th>좌표 / 국가 정보</th>
-            <th>통신망</th>
-            <th>프록시 / VPN / Tor</th>
-            <th>전체 GeoIP 데이터</th>
-            <th>경로</th>
-            <th>브라우저</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>` : `<div class="empty">아직 접속 기록이 없습니다.</div>`}
-    </div>
+    <section class="log-list">${logs.length ? entries : `<div class="empty">아직 접속 기록이 없습니다.</div>`}</section>
   </main>
 </body>
 </html>`;
+}
+
+function renderVisit(log, info, open) {
+  const ip = normalizeIp(log.ip);
+  const summary = [
+    new Date(log.time).toLocaleString("ko-KR"),
+    ip,
+    info?.location,
+    info?.postcode,
+    info?.isp
+  ].filter(Boolean).join(" | ");
+
+  const lines = [
+    ["ID", log.id || "이전 기록에는 ID 없음"],
+    ["시간", log.time],
+    ["동의", log.consent || "기록 없음"],
+    ["IP", ip],
+    ["위치 출처", info?.status === "조회 완료" ? "ipwho.is (공개 GeoIP)" : info?.status || "조회 안 됨"],
+    ["대륙", info?.continent],
+    ["국가", info?.country],
+    ["지역", info?.region],
+    ["도시", info?.location],
+    ["우편번호", info?.postcode],
+    ["위도/경도 (대략)", info?.coordinates],
+    ["시간대", [info?.timezone, info?.timezoneAbbr, info?.timezoneUtc].filter(Boolean).join(" / ")],
+    ["서머타임", info?.daylightSaving === undefined ? "-" : info.daylightSaving ? "예" : "아니오"],
+    ["대륙 코드", info?.continentCode],
+    ["국가 코드", info?.countryCode],
+    ["지역 코드", info?.regionCode],
+    ["국가 전화번호", info?.callingCode && `+${info.callingCode}`],
+    ["수도", info?.capital],
+    ["기관/ISP", info?.isp],
+    ["조직", info?.org],
+    ["ASN", info?.asn],
+    ["도메인", info?.domain],
+    ["IP 유형", info?.networkType],
+    ["프록시/VPN/Tor", formatSecurity(info)],
+    ["위치 메모", "IP 기반 위치는 실제 집 주소가 아니라 네트워크 등록 위치에 가까운 대략값입니다."],
+    ["요청 URL", log.path],
+    ["Host", log.host],
+    ["Forwarded-For", log.forwardedFor],
+    ["Forwarded-Proto", log.forwardedProto],
+    ["Real-IP", log.realIp],
+    ["Accept-Language", log.acceptLanguage],
+    ["Accept", log.accept],
+    ["Referer", log.referer],
+    ["Connection IP", log.connectionIp],
+    ["HTTP Version", log.httpVersion],
+    ["User-Agent", log.userAgent],
+    ["GeoIP 원본 응답", info?.raw ? JSON.stringify(info.raw, null, 2) : "-"]
+  ].map(([label, value]) => `${label}: ${value || "-"}`).join("\n");
+
+  return `<details class="log-card"${open ? " open" : ""}><summary>${escapeHtml(summary)}</summary><pre>${escapeHtml(lines)}</pre></details>`;
 }
 
 function formatLocation(info) {
