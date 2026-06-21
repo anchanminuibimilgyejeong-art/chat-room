@@ -76,8 +76,21 @@ async function getIpInfo(ip) {
     const info = {
       status: "조회 완료",
       location: [data.city, data.region, data.country].filter(Boolean).join(", "),
-      timezone: data.timezone?.id || "",
+      continent: [data.continent, data.continent_code].filter(Boolean).join(" / "),
+      country: [data.country, data.country_code].filter(Boolean).join(" / "),
+      region: [data.region, data.region_code].filter(Boolean).join(" / "),
       postcode: data.postal || "",
+      coordinates: [data.latitude, data.longitude].filter((value) => value !== undefined && value !== null).join(", "),
+      capital: data.capital || "",
+      callingCode: data.calling_code || "",
+      borders: data.borders || "",
+      flag: data.flag?.emoji || "",
+      isEu: data.is_eu,
+      timezone: data.timezone?.id || "",
+      timezoneAbbr: data.timezone?.abbr || "",
+      timezoneUtc: data.timezone?.utc || "",
+      timezoneOffset: data.timezone?.offset,
+      daylightSaving: data.timezone?.is_dst,
       isp: data.connection?.isp || "",
       org: data.connection?.org || "",
       asn: data.connection?.asn ? `AS${data.connection.asn}` : "",
@@ -85,7 +98,8 @@ async function getIpInfo(ip) {
       networkType: data.type || "",
       proxy: data.security?.proxy,
       vpn: data.security?.vpn,
-      tor: data.security?.tor
+      tor: data.security?.tor,
+      raw: data
     };
 
     IP_INFO_CACHE.set(normalizedIp, { data: info, savedAt: Date.now() });
@@ -148,8 +162,10 @@ function adminPage(logs, ipInfoMap) {
       <td>${escapeHtml(new Date(log.time).toLocaleString("ko-KR"))}</td>
       <td>${escapeHtml(normalizeIp(log.ip))}</td>
       <td>${escapeHtml(formatLocation(ipInfoMap.get(normalizeIp(log.ip))))}</td>
+      <td>${escapeHtml(formatCoordinates(ipInfoMap.get(normalizeIp(log.ip))))}</td>
       <td>${escapeHtml(formatNetwork(ipInfoMap.get(normalizeIp(log.ip))))}</td>
       <td>${escapeHtml(formatSecurity(ipInfoMap.get(normalizeIp(log.ip))))}</td>
+      <td>${renderFullInfo(ipInfoMap.get(normalizeIp(log.ip)))}</td>
       <td>${escapeHtml(log.path)}</td>
       <td>${escapeHtml(log.userAgent)}</td>
     </tr>
@@ -199,7 +215,7 @@ function adminPage(logs, ipInfoMap) {
     table {
       width: 100%;
       border-collapse: collapse;
-      min-width: 1260px;
+      min-width: 1680px;
     }
     th,
     td {
@@ -215,14 +231,36 @@ function adminPage(logs, ipInfoMap) {
       font-size: 13px;
       color: #46544e;
     }
-    td:nth-child(7) {
+    td:nth-child(9) {
       max-width: 520px;
       overflow-wrap: anywhere;
     }
     td:nth-child(3),
     td:nth-child(4),
-    td:nth-child(5) {
+    td:nth-child(5),
+    td:nth-child(6) {
       white-space: pre-line;
+    }
+    details {
+      min-width: 210px;
+    }
+    summary {
+      color: #167a67;
+      cursor: pointer;
+      font-weight: 700;
+    }
+    pre {
+      width: 420px;
+      max-height: 320px;
+      overflow: auto;
+      margin: 10px 0 0;
+      padding: 12px;
+      border: 1px solid #d8ddd4;
+      border-radius: 6px;
+      background: #f6f8f5;
+      color: #304039;
+      font: 12px/1.45 Consolas, monospace;
+      white-space: pre-wrap;
     }
     .notice {
       margin: 0 0 18px;
@@ -250,8 +288,10 @@ function adminPage(logs, ipInfoMap) {
             <th>시간</th>
             <th>IP</th>
             <th>위치 / 시간대</th>
+            <th>좌표 / 국가 정보</th>
             <th>통신망</th>
             <th>프록시 / VPN / Tor</th>
+            <th>전체 GeoIP 데이터</th>
             <th>경로</th>
             <th>브라우저</th>
           </tr>
@@ -266,9 +306,29 @@ function adminPage(logs, ipInfoMap) {
 
 function formatLocation(info) {
   if (!info || info.status !== "조회 완료") return info?.status || "--";
-  return [info.location, info.timezone, info.postcode && `우편번호 ${info.postcode}`]
+  return [
+    info.flag && `${info.flag} ${info.location}`,
+    info.continent,
+    info.timezone,
+    info.timezoneAbbr && `${info.timezoneAbbr} (${info.timezoneUtc || "UTC"})`,
+    info.postcode && `우편번호 ${info.postcode}`
+  ]
     .filter(Boolean)
     .join("\n");
+}
+
+function formatCoordinates(info) {
+  if (!info || info.status !== "조회 완료") return "--";
+  return [
+    info.coordinates && `좌표(대략): ${info.coordinates}`,
+    info.country,
+    info.region,
+    info.capital && `수도: ${info.capital}`,
+    info.callingCode && `국가번호: +${info.callingCode}`,
+    info.borders && `국경: ${info.borders}`,
+    info.isEu !== undefined && `EU: ${info.isEu ? "예" : "아니오"}`,
+    info.daylightSaving !== undefined && `서머타임: ${info.daylightSaving ? "예" : "아니오"}`
+  ].filter(Boolean).join("\n");
 }
 
 function formatNetwork(info) {
@@ -280,11 +340,19 @@ function formatNetwork(info) {
 
 function formatSecurity(info) {
   if (!info || info.status !== "조회 완료") return "--";
+  if (info.proxy === undefined && info.vpn === undefined && info.tor === undefined) {
+    return "이 GeoIP 서비스에서는 제공하지 않음";
+  }
   return [
     `프록시: ${info.proxy ? "예" : "아니오"}`,
     `VPN: ${info.vpn ? "예" : "아니오"}`,
     `Tor: ${info.tor ? "예" : "아니오"}`
   ].join("\n");
+}
+
+function renderFullInfo(info) {
+  if (!info || info.status !== "조회 완료") return "--";
+  return `<details><summary>전체 데이터 보기</summary><pre>${escapeHtml(JSON.stringify(info.raw, null, 2))}</pre></details>`;
 }
 
 async function handle(req, res) {
