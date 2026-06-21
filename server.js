@@ -239,22 +239,14 @@ async function saveVisit(req) {
   await writeLogs(logs);
 }
 
-function publicPage(imageUrl) {
-  return `<!doctype html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title></title>
-  <meta property="og:type" content="website">
-  <meta property="og:title" content="BHC 뿌링클+콜라 1.25L">
-  <meta property="og:image" content="${escapeHtml(imageUrl)}">
-  <meta property="og:image:width" content="1729">
-  <meta property="og:image:height" content="910">
-  <meta name="twitter:card" content="summary_large_image">
-</head>
-<body></body>
-</html>`;
+async function sendPreviewImage(res) {
+  const image = await fs.readFile(PREVIEW_IMAGE);
+  res.writeHead(200, {
+    "content-type": "image/png",
+    "cache-control": "public, max-age=86400",
+    "x-content-type-options": "nosniff"
+  });
+  res.end(image);
 }
 
 function adminPage(logs, ipInfoMap) {
@@ -456,13 +448,7 @@ async function handle(req, res) {
 
   try {
     if (url.pathname === "/assets/discord-preview.png") {
-      const image = await fs.readFile(PREVIEW_IMAGE);
-      res.writeHead(200, {
-        "content-type": "image/png",
-        "cache-control": "public, max-age=86400",
-        "x-content-type-options": "nosniff"
-      });
-      res.end(image);
+      await sendPreviewImage(res);
       return;
     }
 
@@ -472,11 +458,9 @@ async function handle(req, res) {
       return;
     }
 
-    if (url.pathname === "/") {
+    if (url.pathname === "/" || url.pathname === "/discord-preview") {
       await saveVisit(req);
-      const protocol = req.headers["x-forwarded-proto"] || "http";
-      const imageUrl = `${protocol}://${req.headers.host}/assets/discord-preview.png`;
-      send(res, 200, publicPage(imageUrl));
+      await sendPreviewImage(res);
       return;
     }
 
