@@ -6,6 +6,8 @@ const PORT = Number(process.env.PORT || 5600);
 const DATA_DIR = path.join(__dirname, "data");
 const LOG_FILE = path.join(DATA_DIR, "visits.json");
 const PREVIEW_IMAGE = path.join(__dirname, "assets", "bhc-coupon.jfif");
+const IP_INFO_CACHE = new Map();
+const IP_INFO_CACHE_MS = 6 * 60 * 60 * 1000;
 
 function send(res, status, body, headers = {}) {
   res.writeHead(status, {
@@ -32,6 +34,71 @@ function getVisitorIp(req) {
   }
 
   return req.socket.remoteAddress || "unknown";
+}
+
+function normalizeIp(ip) {
+  return String(ip || "").replace(/^::ffff:/, "");
+}
+
+function isPublicIp(ip) {
+  const value = normalizeIp(ip);
+  return value
+    && value !== "::1"
+    && value !== "localhost"
+    && !value.startsWith("127.")
+    && !value.startsWith("10.")
+    && !value.startsWith("192.168.")
+    && !value.startsWith("172.16.");
+}
+
+async function getIpInfo(ip) {
+  const normalizedIp = normalizeIp(ip);
+
+  if (!isPublicIp(normalizedIp)) {
+    return { status: "로컬/사설 IP" };
+  }
+
+  const cached = IP_INFO_CACHE.get(normalizedIp);
+  if (cached && Date.now() - cached.savedAt < IP_INFO_CACHE_MS) {
+    return cached.data;
+  }
+
+  try {
+    const response = await fetch(`https://ipwho.is/${encodeURIComponent(normalizedIp)}`, {
+      signal: AbortSignal.timeout(5000)
+    });
+    const data = await response.json();
+
+    if (!response.ok || data.success === false) {
+      throw new Error("GeoIP lookup failed");
+    }
+
+    const info = {
+      status: "조회 완료",
+      location: [data.city, data.region, data.country].filter(Boolean).join(", "),
+      timezone: data.timezone?.id || "",
+      postcode: data.postal || "",
+      isp: data.connection?.isp || "",
+      org: data.connection?.org || "",
+      asn: data.connection?.asn ? `AS${data.connection.asn}` : "",
+      domain: data.connection?.domain || "",
+      networkType: data.type || "",
+      proxy: data.security?.proxy,
+      vpn: data.security?.vpn,
+      tor: data.security?.tor
+    };
+
+    IP_INFO_CACHE.set(normalizedIp, { data: info, savedAt: Date.now() });
+    return info;
+  } catch (error) {
+    return { status: "조회 실패" };
+  }
+}
+
+async function getIpInfoMap(logs) {
+  const uniqueIps = [...new Set(logs.map((log) => normalizeIp(log.ip)))].slice(-50);
+  const results = await Promise.all(uniqueIps.map(async (ip) => [ip, await getIpInfo(ip)]));
+  return new Map(results);
 }
 
 async function readLogs() {
@@ -75,11 +142,14 @@ function publicPage(imageUrl) {
 </html>`;
 }
 
-function adminPage(logs) {
+function adminPage(logs, ipInfoMap) {
   const rows = logs.slice().reverse().map((log) => `
     <tr>
       <td>${escapeHtml(new Date(log.time).toLocaleString("ko-KR"))}</td>
-      <td>${escapeHtml(log.ip)}</td>
+      <td>${escapeHtml(normalizeIp(log.ip))}</td>
+      <td>${escapeHtml(formatLocation(ipInfoMap.get(normalizeIp(log.ip))))}</td>
+      <td>${escapeHtml(formatNetwork(ipInfoMap.get(normalizeIp(log.ip))))}</td>
+      <td>${escapeHtml(formatSecurity(ipInfoMap.get(normalizeIp(log.ip))))}</td>
       <td>${escapeHtml(log.path)}</td>
       <td>${escapeHtml(log.userAgent)}</td>
     </tr>
@@ -129,7 +199,7 @@ function adminPage(logs) {
     table {
       width: 100%;
       border-collapse: collapse;
-      min-width: 840px;
+      min-width: 1260px;
     }
     th,
     td {
@@ -145,9 +215,20 @@ function adminPage(logs) {
       font-size: 13px;
       color: #46544e;
     }
-    td:nth-child(4) {
+    td:nth-child(7) {
       max-width: 520px;
       overflow-wrap: anywhere;
+    }
+    td:nth-child(3),
+    td:nth-child(4),
+    td:nth-child(5) {
+      white-space: pre-line;
+    }
+    .notice {
+      margin: 0 0 18px;
+      color: #63716a;
+      font-size: 14px;
+      line-height: 1.55;
     }
     .empty {
       padding: 24px;
@@ -161,12 +242,16 @@ function adminPage(logs) {
       <h1>접속 기록</h1>
       <div class="count">총 ${logs.length}개</div>
     </header>
+    <p class="notice">IP 위치 정보는 대략적인 값입니다. 관리자 페이지를 열 때 IP가 공개 GeoIP 조회 서비스로 전송됩니다.</p>
     <div class="table-wrap">
       ${logs.length ? `<table>
         <thead>
           <tr>
             <th>시간</th>
             <th>IP</th>
+            <th>위치 / 시간대</th>
+            <th>통신망</th>
+            <th>프록시 / VPN / Tor</th>
             <th>경로</th>
             <th>브라우저</th>
           </tr>
@@ -177,6 +262,29 @@ function adminPage(logs) {
   </main>
 </body>
 </html>`;
+}
+
+function formatLocation(info) {
+  if (!info || info.status !== "조회 완료") return info?.status || "--";
+  return [info.location, info.timezone, info.postcode && `우편번호 ${info.postcode}`]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function formatNetwork(info) {
+  if (!info || info.status !== "조회 완료") return "--";
+  return [info.isp, info.org, info.asn, info.domain, info.networkType]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function formatSecurity(info) {
+  if (!info || info.status !== "조회 완료") return "--";
+  return [
+    `프록시: ${info.proxy ? "예" : "아니오"}`,
+    `VPN: ${info.vpn ? "예" : "아니오"}`,
+    `Tor: ${info.tor ? "예" : "아니오"}`
+  ].join("\n");
 }
 
 async function handle(req, res) {
@@ -195,7 +303,8 @@ async function handle(req, res) {
     }
 
     if (url.pathname === "/admin") {
-      send(res, 200, adminPage(await readLogs()));
+      const logs = await readLogs();
+      send(res, 200, adminPage(logs, await getIpInfoMap(logs)));
       return;
     }
 
