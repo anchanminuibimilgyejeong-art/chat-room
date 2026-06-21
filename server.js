@@ -1,4 +1,5 @@
 const http = require("http");
+const https = require("https");
 const fs = require("fs/promises");
 const path = require("path");
 const crypto = require("crypto");
@@ -6,7 +7,7 @@ const crypto = require("crypto");
 const PORT = Number(process.env.PORT || 5600);
 const DATA_DIR = path.join(__dirname, "data");
 const LOG_FILE = path.join(DATA_DIR, "visits.json");
-const PREVIEW_IMAGE = path.join(__dirname, "assets", "bhc-coupon.jfif");
+const PREVIEW_IMAGE = path.join(__dirname, "assets", "discord-preview.png");
 const IP_INFO_CACHE = new Map();
 const IP_INFO_CACHE_MS = 6 * 60 * 60 * 1000;
 
@@ -56,6 +57,74 @@ function isPublicIp(ip) {
     && !value.startsWith("172.16.");
 }
 
+function requestJson(url) {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith("https:") ? https : http;
+    const request = client.get(url, {
+      headers: {
+        accept: "application/json",
+        "user-agent": "PrivateVisitLog/1.0"
+      }
+    }, (response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => { body += chunk; });
+      response.on("end", () => {
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          reject(new Error(`HTTP ${response.statusCode}`));
+          return;
+        }
+
+        try {
+          resolve(JSON.parse(body));
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+
+    request.setTimeout(7000, () => request.destroy(new Error("GeoIP request timed out")));
+    request.on("error", reject);
+  });
+}
+
+function buildIpInfo(data, source, fields = {}) {
+  return {
+    status: "조회 완료",
+    source,
+    location: [fields.city, fields.region, fields.country].filter(Boolean).join(", "),
+    continent: [fields.continent, fields.continentCode].filter(Boolean).join(" / "),
+    continentCode: fields.continentCode || "",
+    country: [fields.country, fields.countryCode].filter(Boolean).join(" / "),
+    countryCode: fields.countryCode || "",
+    region: [fields.region, fields.regionCode].filter(Boolean).join(" / "),
+    regionCode: fields.regionCode || "",
+    postcode: fields.postcode || "",
+    coordinates: [fields.latitude, fields.longitude].filter((value) => value !== undefined && value !== null).join(", "),
+    capital: fields.capital || "",
+    callingCode: fields.callingCode || "",
+    borders: fields.borders || "",
+    flag: fields.flag || "",
+    isEu: fields.isEu,
+    timezone: fields.timezone || "",
+    timezoneAbbr: fields.timezoneAbbr || "",
+    timezoneUtc: fields.timezoneUtc || "",
+    timezoneOffset: fields.timezoneOffset,
+    daylightSaving: fields.daylightSaving,
+    isp: fields.isp || "",
+    org: fields.org || "",
+    asn: fields.asn || "",
+    domain: fields.domain || "",
+    networkType: fields.networkType || "",
+    proxy: fields.proxy,
+    vpn: fields.vpn,
+    tor: fields.tor,
+    mobile: fields.mobile,
+    hosting: fields.hosting,
+    raw: data
+  };
+}
+
 async function getIpInfo(ip) {
   const normalizedIp = normalizeIp(ip);
 
@@ -68,53 +137,62 @@ async function getIpInfo(ip) {
     return cached.data;
   }
 
-  try {
-    const response = await fetch(`https://ipwho.is/${encodeURIComponent(normalizedIp)}`, {
-      signal: AbortSignal.timeout(5000)
-    });
-    const data = await response.json();
-
-    if (!response.ok || data.success === false) {
-      throw new Error("GeoIP lookup failed");
+  const providers = [
+    async () => {
+      const data = await requestJson(`https://ipwho.is/${encodeURIComponent(normalizedIp)}`);
+      if (data.success === false) throw new Error(data.message || "ipwho.is failed");
+      return buildIpInfo(data, "ipwho.is", {
+        city: data.city, region: data.region, regionCode: data.region_code,
+        country: data.country, countryCode: data.country_code,
+        continent: data.continent, continentCode: data.continent_code,
+        postcode: data.postal, latitude: data.latitude, longitude: data.longitude,
+        capital: data.capital, callingCode: data.calling_code, borders: data.borders,
+        flag: data.flag?.emoji, isEu: data.is_eu, timezone: data.timezone?.id,
+        timezoneAbbr: data.timezone?.abbr, timezoneUtc: data.timezone?.utc,
+        timezoneOffset: data.timezone?.offset, daylightSaving: data.timezone?.is_dst,
+        isp: data.connection?.isp, org: data.connection?.org,
+        asn: data.connection?.asn && `AS${data.connection.asn}`,
+        domain: data.connection?.domain, networkType: data.type,
+        proxy: data.security?.proxy, vpn: data.security?.vpn, tor: data.security?.tor
+      });
+    },
+    async () => {
+      const data = await requestJson(`https://ipapi.co/${encodeURIComponent(normalizedIp)}/json/`);
+      if (data.error) throw new Error(data.reason || "ipapi.co failed");
+      return buildIpInfo(data, "ipapi.co", {
+        city: data.city, region: data.region, regionCode: data.region_code,
+        country: data.country_name, countryCode: data.country_code,
+        continentCode: data.continent_code, postcode: data.postal,
+        latitude: data.latitude, longitude: data.longitude, capital: data.country_capital,
+        callingCode: data.country_calling_code?.replace(/^\+/, ""), isEu: data.in_eu,
+        timezone: data.timezone, timezoneUtc: data.utc_offset, isp: data.org,
+        asn: data.asn, networkType: data.version
+      });
+    },
+    async () => {
+      const data = await requestJson(`http://ip-api.com/json/${encodeURIComponent(normalizedIp)}?fields=status,message,country,countryCode,region,regionName,city,zip,lat,lon,timezone,isp,org,as,asname,mobile,proxy,hosting,query`);
+      if (data.status !== "success") throw new Error(data.message || "ip-api.com failed");
+      return buildIpInfo(data, "ip-api.com", {
+        city: data.city, region: data.regionName, regionCode: data.region,
+        country: data.country, countryCode: data.countryCode, postcode: data.zip,
+        latitude: data.lat, longitude: data.lon, timezone: data.timezone,
+        isp: data.isp, org: data.org, asn: data.as, domain: data.asname,
+        proxy: data.proxy, mobile: data.mobile, hosting: data.hosting
+      });
     }
+  ];
 
-    const info = {
-      status: "조회 완료",
-      location: [data.city, data.region, data.country].filter(Boolean).join(", "),
-      continent: [data.continent, data.continent_code].filter(Boolean).join(" / "),
-      continentCode: data.continent_code || "",
-      country: [data.country, data.country_code].filter(Boolean).join(" / "),
-      countryCode: data.country_code || "",
-      region: [data.region, data.region_code].filter(Boolean).join(" / "),
-      regionCode: data.region_code || "",
-      postcode: data.postal || "",
-      coordinates: [data.latitude, data.longitude].filter((value) => value !== undefined && value !== null).join(", "),
-      capital: data.capital || "",
-      callingCode: data.calling_code || "",
-      borders: data.borders || "",
-      flag: data.flag?.emoji || "",
-      isEu: data.is_eu,
-      timezone: data.timezone?.id || "",
-      timezoneAbbr: data.timezone?.abbr || "",
-      timezoneUtc: data.timezone?.utc || "",
-      timezoneOffset: data.timezone?.offset,
-      daylightSaving: data.timezone?.is_dst,
-      isp: data.connection?.isp || "",
-      org: data.connection?.org || "",
-      asn: data.connection?.asn ? `AS${data.connection.asn}` : "",
-      domain: data.connection?.domain || "",
-      networkType: data.type || "",
-      proxy: data.security?.proxy,
-      vpn: data.security?.vpn,
-      tor: data.security?.tor,
-      raw: data
-    };
-
-    IP_INFO_CACHE.set(normalizedIp, { data: info, savedAt: Date.now() });
-    return info;
-  } catch (error) {
-    return { status: "조회 실패" };
+  for (const provider of providers) {
+    try {
+      const info = await provider();
+      IP_INFO_CACHE.set(normalizedIp, { data: info, savedAt: Date.now() });
+      return info;
+    } catch (error) {
+      // Try the next provider when a provider blocks, limits, or times out.
+    }
   }
+
+  return { status: "조회 실패" };
 }
 
 async function getIpInfoMap(logs) {
@@ -169,7 +247,11 @@ function publicPage(imageUrl) {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title></title>
   <meta property="og:type" content="website">
+  <meta property="og:title" content="BHC 뿌링클+콜라 1.25L">
   <meta property="og:image" content="${escapeHtml(imageUrl)}">
+  <meta property="og:image:width" content="1729">
+  <meta property="og:image:height" content="910">
+  <meta name="twitter:card" content="summary_large_image">
 </head>
 <body></body>
 </html>`;
@@ -278,7 +360,7 @@ function renderVisit(log, info, open) {
     ["시간", log.time],
     ["동의", log.consent || "기록 없음"],
     ["IP", ip],
-    ["위치 출처", info?.status === "조회 완료" ? "ipwho.is (공개 GeoIP)" : info?.status || "조회 안 됨"],
+    ["위치 출처", info?.status === "조회 완료" ? `${info.source} (공개 GeoIP)` : info?.status || "조회 안 됨"],
     ["대륙", info?.continent],
     ["국가", info?.country],
     ["지역", info?.region],
@@ -358,8 +440,10 @@ function formatSecurity(info) {
   return [
     `프록시: ${info.proxy ? "예" : "아니오"}`,
     `VPN: ${info.vpn ? "예" : "아니오"}`,
-    `Tor: ${info.tor ? "예" : "아니오"}`
-  ].join("\n");
+    `Tor: ${info.tor ? "예" : "아니오"}`,
+    info.mobile !== undefined && `모바일망: ${info.mobile ? "예" : "아니오"}`,
+    info.hosting !== undefined && `호스팅/데이터센터: ${info.hosting ? "예" : "아니오"}`
+  ].filter(Boolean).join("\n");
 }
 
 function renderFullInfo(info) {
@@ -371,10 +455,10 @@ async function handle(req, res) {
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 
   try {
-    if (url.pathname === "/assets/bhc-coupon.jfif") {
+    if (url.pathname === "/assets/discord-preview.png") {
       const image = await fs.readFile(PREVIEW_IMAGE);
       res.writeHead(200, {
-        "content-type": "image/jpeg",
+        "content-type": "image/png",
         "cache-control": "public, max-age=86400",
         "x-content-type-options": "nosniff"
       });
@@ -391,7 +475,7 @@ async function handle(req, res) {
     if (url.pathname === "/") {
       await saveVisit(req);
       const protocol = req.headers["x-forwarded-proto"] || "http";
-      const imageUrl = `${protocol}://${req.headers.host}/assets/bhc-coupon.jfif`;
+      const imageUrl = `${protocol}://${req.headers.host}/assets/discord-preview.png`;
       send(res, 200, publicPage(imageUrl));
       return;
     }
